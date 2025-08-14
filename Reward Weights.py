@@ -13,10 +13,8 @@ import matplotlib.pyplot as plt
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import warnings
 
-# 忽略警告
 warnings.filterwarnings("ignore")
 
-# 设置随机种子以确保结果可复现
 def set_seed(seed=105):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
@@ -24,62 +22,51 @@ def set_seed(seed=105):
     np.random.seed(seed)
 set_seed()
 
-# 设备配置
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"使用设备: {device}")
+print(f"Using device: {device}")
 
 
-# -------------------------- 数据集读取与预处理 --------------------------
 def load_and_preprocess_data(data_path="skill_builder_data_corrected_collapsed.csv"):
-    # 读取数据
     df = pd.read_csv(data_path, encoding='latin1')
-    print("原始数据前5行:")
+    print("First 5 rows of raw data:")
     print(df.head())
     
-    # 处理标签列（correct）
     valid_values = [0, 1]
     df['correct'] = df['correct'].apply(lambda x: 0 if x not in valid_values else x)
-    print(f"标签列（correct）唯一值: {df['correct'].unique()}")
+    print(f"Unique values in label column (correct): {df['correct'].unique()}")
     
-    # 定义特征列表及名称映射（用于可视化）
     features = ['user_id', 'problem_id', 'skill_id', 'overlap_time', 'attempt_count']
     feature_names = {
-        'user_id': '用户ID',
-        'problem_id': '题目ID',
-        'skill_id': '技能ID',
-        'overlap_time': '重叠时间',
-        'attempt_count': '尝试次数'
+        'user_id': 'User ID',
+        'problem_id': 'Problem ID',
+        'skill_id': 'Skill ID',
+        'overlap_time': 'Overlap Time',
+        'attempt_count': 'Attempt Count'
     }
-    print(f"使用的特征: {features}")
+    print(f"Features used: {features}")
     
-    # 检查特征列是否存在
     missing_columns = [col for col in features if col not in df.columns]
     if missing_columns:
-        raise ValueError(f"数据中缺少必要特征列: {missing_columns}")
+        raise ValueError(f"Missing required feature columns in data: {missing_columns}")
     
-    # 移除特征列中的缺失值
     df = df.dropna(subset=features)
-    print(f"预处理后的数据量: {len(df)} 条")
+    print(f"Data volume after preprocessing: {len(df)} entries")
     
-    # 类别特征编码
     label_encoders = {}
     for col in ['user_id', 'problem_id', 'skill_id']:
         le = LabelEncoder()
         df[col] = le.fit_transform(df[col].astype(str))
         label_encoders[col] = le
-        print(f"编码特征 {col}，类别数: {len(le.classes_)}")
+        print(f"Encoded feature {col}, number of categories: {len(le.classes_)}")
     
-    # 特征归一化
     scalers = {}
     for feature in features:
         scaler = MinMaxScaler()
         df[feature] = scaler.fit_transform(df[feature].values.reshape(-1, 1)).flatten()
         scalers[feature] = scaler
     
-    # 按用户、技能、时间排序
     df = df.sort_values(by=['user_id', 'skill_id', 'overlap_time', 'attempt_count'])
     
-    # 创建序列数据（滑动窗口法）
     def split_data(data, time_step):
         X, y = [], []
         for i in range(len(data) - time_step):
@@ -88,19 +75,16 @@ def load_and_preprocess_data(data_path="skill_builder_data_corrected_collapsed.c
             y.append(y_val)
         return np.array(X), np.array(y)
     
-    # 序列长度
     time_step = 50  
     dataX, datay = split_data(df, time_step=time_step)
-    print(f"序列数据形状: X={dataX.shape}, y={datay.shape}")
+    print(f"Sequence data shape: X={dataX.shape}, y={datay.shape}")
     
-    # 【数据集比例控制】调整此处控制使用的数据量
-    data_percentage = 0.2  # 例如：0.5表示使用50%的数据，1.0表示全量数据
+    data_percentage = 0.2  
     num_samples = int(dataX.shape[0] * data_percentage)
     dataX = dataX[:num_samples]
     datay = datay[:num_samples]
-    print(f"使用 {data_percentage*100}% 的数据，最终形状: X={dataX.shape}, y={datay.shape}")
+    print(f"Using {data_percentage*100}% of data, final shape: X={dataX.shape}, y={datay.shape}")
     
-    # 数据集划分
     def train_val_test_split(dataX, datay, shuffle=True):
         if shuffle:
             indices = np.arange(len(dataX))
@@ -114,9 +98,8 @@ def load_and_preprocess_data(data_path="skill_builder_data_corrected_collapsed.c
                 dataX[val_idx:], datay[val_idx:])
     
     train_X, train_y, val_X, val_y, test_X, test_y = train_val_test_split(dataX, datay, shuffle=True)
-    print(f"训练集: {len(train_X)} 验证集: {len(val_X)} 测试集: {len(test_X)}")
+    print(f"Training set: {len(train_X)} Validation set: {len(val_X)} Test set: {len(test_X)}")
     
-    # 转换为PyTorch张量
     train_X = torch.tensor(train_X, dtype=torch.float32).to(device)
     train_y = torch.tensor(train_y, dtype=torch.float32).unsqueeze(1).to(device)
     val_X = torch.tensor(val_X, dtype=torch.float32).to(device)
@@ -136,13 +119,11 @@ def load_and_preprocess_data(data_path="skill_builder_data_corrected_collapsed.c
     }
 
 
-# -------------------------- 模型定义 --------------------------
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super().__init__()
         self.d_model = d_model
         
-        # 生成位置编码
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
@@ -150,13 +131,11 @@ class PositionalEncoding(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)
         
-        # 修复：检查是否已存在'pe'缓冲区，如果存在则不重复注册
         if not hasattr(self, 'pe'):
             self.register_buffer('pe', pe)
     
     def forward(self, x):
         seq_len = x.size(1)
-        # 如果序列长度超过预定义的max_len，则动态生成新的位置编码
         if seq_len > self.pe.size(1):
             new_pe = torch.zeros(seq_len, self.d_model, device=x.device)
             position = torch.arange(0, seq_len, dtype=torch.float, device=x.device).unsqueeze(1)
@@ -252,12 +231,11 @@ class CNN_LSTM_MultiHeadAttention(nn.Module):
         return out
 
 
-# -------------------------- 训练与评估函数 --------------------------
 def train_and_evaluate(model, model_name, criterion, num_epochs, batch_size, 
                        train_X, train_y, val_X, val_y, test_X, test_y, 
                        save_dir, timestamp, feature_weights=None):
     start_time = datetime.now()
-    print(f"\n{model_name} 开始训练时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"\n{model_name} training start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     history = {
         'loss': [], 'val_loss': [], 'train_accuracy': [], 'val_accuracy': [],
@@ -283,7 +261,6 @@ def train_and_evaluate(model, model_name, criterion, num_epochs, batch_size,
             optimizer.step()
             running_loss += loss.item()
 
-        # 验证集评估
         model.eval()
         with torch.no_grad():
             val_outputs = model(val_X, feature_weights)
@@ -299,7 +276,6 @@ def train_and_evaluate(model, model_name, criterion, num_epochs, batch_size,
             val_f1 = f1_score(val_targets, val_preds)
             val_roc_auc = roc_auc_score(val_targets, val_probs)
 
-        # 记录指标
         avg_train_loss = running_loss / (len(train_X) // batch_size)
         history['loss'].append(avg_train_loss)
         history['val_loss'].append(val_loss.item())
@@ -316,12 +292,11 @@ def train_and_evaluate(model, model_name, criterion, num_epochs, batch_size,
 
         scheduler.step(val_loss)
         print(
-            f'Epoch [{epoch + 1}/{num_epochs}], 耗时: {history["epoch_time"][-1]:.2f}秒, '
+            f'Epoch [{epoch + 1}/{num_epochs}], Time: {history["epoch_time"][-1]:.2f}s, '
             f'Train Loss: {history["loss"][-1]:.4f}, Train Accuracy: {history["train_accuracy"][-1]:.4f}, '
             f'Val Loss: {val_loss.item():.4f}, Val Accuracy: {val_acc:.4f}'
         )
 
-    # 测试集评估
     model.eval()
     with torch.no_grad():
         test_outputs = model(test_X, feature_weights)
@@ -337,10 +312,9 @@ def train_and_evaluate(model, model_name, criterion, num_epochs, batch_size,
         test_f1 = f1_score(test_targets, test_preds)
         test_roc_auc = roc_auc_score(test_targets, test_probs)
 
-    print(f"\n测试集结果: Loss: {test_loss.item():.4f}, Accuracy: {test_acc:.4f}, "
+    print(f"\nTest set results: Loss: {test_loss.item():.4f}, Accuracy: {test_acc:.4f}, "
           f"F1: {test_f1:.4f}, ROC AUC: {test_roc_auc:.4f}")
 
-    # 保存训练历史
     metrics_df = pd.DataFrame(history)
     os.makedirs(save_dir, exist_ok=True)
     metrics_df.to_csv(os.path.join(save_dir, f"{model_name}_metrics_{timestamp}.csv"), index=False)
@@ -355,17 +329,13 @@ def train_and_evaluate(model, model_name, criterion, num_epochs, batch_size,
     }
 
 
-# -------------------------- 敏感性分析函数 --------------------------
 def analyze_single_feature(model_class, base_metrics, weights_range, feature_idx, feature_name, 
                           train_X, train_y, val_X, val_y, test_X, test_y, save_dir, params):
-    """对单个特征进行敏感性分析，调整其权重并评估模型性能变化"""
-    print(f"\n===== 开始对特征 '{feature_name}' 进行敏感性分析 =====")
+    print(f"\n===== Starting sensitivity analysis for feature '{feature_name}' =====")
     
-    # 为该特征创建单独的结果目录
     feature_dir = os.path.join(save_dir, feature_name)
     os.makedirs(feature_dir, exist_ok=True)
     
-    # 存储不同权重下的性能指标
     results = {
         'weights': [],
         'accuracy': [],
@@ -376,7 +346,6 @@ def analyze_single_feature(model_class, base_metrics, weights_range, feature_idx
         'loss': []
     }
     
-    # 记录基线性能
     results['weights'].append(1.0)
     results['accuracy'].append(base_metrics['accuracy'])
     results['precision'].append(base_metrics['precision'])
@@ -385,18 +354,15 @@ def analyze_single_feature(model_class, base_metrics, weights_range, feature_idx
     results['roc_auc'].append(base_metrics['roc_auc'])
     results['loss'].append(base_metrics['loss'])
     
-    # 对每个权重值进行评估
     for weight in weights_range:
-        if weight == 1.0:  # 跳过基线权重，已记录
+        if weight == 1.0:
             continue
             
-        print(f"\n----- 评估特征权重: {weight} -----")
+        print(f"\n----- Evaluating feature weight: {weight} -----")
         
-        # 创建特征权重向量（只调整目标特征，其他保持1.0）
         feature_weights = torch.ones(params['input_size'], dtype=torch.float32)
         feature_weights[feature_idx] = weight
         
-        # 重新初始化模型
         model = model_class(
             conv_input=params['conv_input'], 
             input_size=params['input_size'], 
@@ -407,7 +373,6 @@ def analyze_single_feature(model_class, base_metrics, weights_range, feature_idx
             output_size=params['output_size']
         ).to(device)
         
-        # 训练并评估模型
         _, _, test_metrics = train_and_evaluate(
             model=model,
             model_name=f'CNN_LSTM_Attn_{feature_name}_weight_{weight}',
@@ -425,7 +390,6 @@ def analyze_single_feature(model_class, base_metrics, weights_range, feature_idx
             feature_weights=feature_weights
         )
         
-        # 记录结果
         results['weights'].append(weight)
         results['accuracy'].append(test_metrics['accuracy'])
         results['precision'].append(test_metrics['precision'])
@@ -434,37 +398,33 @@ def analyze_single_feature(model_class, base_metrics, weights_range, feature_idx
         results['roc_auc'].append(test_metrics['roc_auc'])
         results['loss'].append(test_metrics['loss'])
         
-        # 每完成一个权重的训练就保存一次结果，防止意外中断
         results_df = pd.DataFrame(results)
         results_df.to_csv(os.path.join(feature_dir, f'sensitivity_results.csv'), index=False)
     
-    # 生成可视化结果
     plot_sensitivity_results(results, feature_name, feature_dir)
     
-    print(f"===== 特征 '{feature_name}' 的敏感性分析已完成 =====")
+    print(f"===== Sensitivity analysis for feature '{feature_name}' completed =====")
     return results
 
 
 def plot_sensitivity_results(results, feature_name, save_dir):
-    """绘制敏感性分析结果图"""
     plt.figure(figsize=(15, 10))
     
-    # 按指标绘制子图
     metrics = [
-        ('accuracy', '准确率', 'green'),
-        ('precision', '精确率', 'blue'),
-        ('recall', '召回率', 'orange'),
-        ('f1', 'F1分数', 'purple'),
+        ('accuracy', 'Accuracy', 'green'),
+        ('precision', 'Precision', 'blue'),
+        ('recall', 'Recall', 'orange'),
+        ('f1', 'F1 Score', 'purple'),
         ('roc_auc', 'ROC AUC', 'red'),
-        ('loss', '损失值', 'gray')
+        ('loss', 'Loss Value', 'gray')
     ]
     
     for i, (metric, label, color) in enumerate(metrics, 1):
         plt.subplot(2, 3, i)
         plt.plot(results['weights'], results[metric], marker='o', color=color, linewidth=2)
-        plt.axvline(x=1.0, color='black', linestyle='--', alpha=0.5, label='基线权重')
+        plt.axvline(x=1.0, color='black', linestyle='--', alpha=0.5, label='Baseline weight')
         plt.title(f'{feature_name} - {label}')
-        plt.xlabel('特征权重')
+        plt.xlabel('Feature weight')
         plt.ylabel(label)
         plt.grid(True, alpha=0.3)
         plt.legend()
@@ -474,26 +434,21 @@ def plot_sensitivity_results(results, feature_name, save_dir):
     plt.close()
 
 
-# -------------------------- 主函数 --------------------------
 def main():
-    # 配置参数
     data_path = "skill_builder_data_corrected_collapsed.csv"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = os.path.join("experiment_results", timestamp)
     os.makedirs(save_dir, exist_ok=True)
-    # 创建敏感性分析结果目录
     sensitivity_dir = os.path.join(save_dir, "sensitivity_analysis")
     os.makedirs(sensitivity_dir, exist_ok=True)
     
     num_epochs = 50
     batch_size = 32
     
-    # 加载数据
     data = load_and_preprocess_data(data_path)
     features = data['features']
     feature_names = data['feature_names']
     
-    # 模型参数
     model_params = {
         'conv_input': 32,
         'input_size': len(features),
@@ -504,25 +459,23 @@ def main():
         'output_size': 1,
         'num_epochs': num_epochs,
         'batch_size': batch_size,
-        'criterion': nn.BCELoss(),
+        'criterion': nn.BCELoss().to(device),
         'timestamp': timestamp
     }
     
-    # 首先训练基线模型（所有特征权重为1.0）
-    print("===== 训练基线模型（所有特征权重为1.0） =====")
     base_model = CNN_LSTM_MultiHeadAttention(
-        conv_input=model_params['conv_input'], 
-        input_size=model_params['input_size'], 
-        hidden_size=model_params['hidden_size'], 
-        num_layers=model_params['num_layers'], 
-        num_heads=model_params['num_heads'], 
-        dropout_prob=model_params['dropout_prob'], 
-        output_size=model_params['output_size']
+        conv_input=model_params['conv_input'],
+        input_size=model_params['input_size'],
+        hidden_size=model_params['hidden_size'],
+        num_layers=model_params['num_layers'],
+        num_heads=model_params['num_heads'],
+        dropout_prob=model_params['dropout_prob']
     ).to(device)
     
-    base_history, base_duration, base_metrics = train_and_evaluate(
+    print("\n----- Training base model -----")
+    _, _, base_metrics = train_and_evaluate(
         model=base_model,
-        model_name='CNN_LSTM_Attn_baseline',
+        model_name="CNN_LSTM_MultiHeadAttention_Base",
         criterion=model_params['criterion'],
         num_epochs=num_epochs,
         batch_size=batch_size,
@@ -533,56 +486,29 @@ def main():
         test_X=data['test_X'],
         test_y=data['test_y'],
         save_dir=save_dir,
-        timestamp=timestamp,
-        feature_weights=None  # 不调整权重，使用默认值1.0
+        timestamp=timestamp
     )
     
-    # 保存基线模型结果
-    base_results_df = pd.DataFrame(base_history)
-    base_results_df.to_csv(os.path.join(save_dir, 'baseline_training_history.csv'), index=False)
+    weights_range = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
     
-    # 定义权重范围（从0.0到2.0，步长0.2）
-    weights_range = np.arange(0.0, 2.1, 0.2)
+    for feature_idx, feature in enumerate(features):
+        analyze_single_feature(
+            model_class=CNN_LSTM_MultiHeadAttention,
+            base_metrics=base_metrics,
+            weights_range=weights_range,
+            feature_idx=feature_idx,
+            feature_name=feature_names[feature],
+            train_X=data['train_X'],
+            train_y=data['train_y'],
+            val_X=data['val_X'],
+            val_y=data['val_y'],
+            test_X=data['test_X'],
+            test_y=data['test_y'],
+            save_dir=sensitivity_dir,
+            params=model_params
+        )
     
-    # 让用户选择要分析的特征
-    print("\n可用特征列表:")
-    for i, feature in enumerate(features):
-        print(f"{i+1}. {feature_names.get(feature, feature)} ({feature})")
-    
-    while True:
-        try:
-            choice = int(input("\n请选择要分析的特征编号 (1-5, 输入0结束): "))
-            if choice == 0:
-                print("分析结束")
-                break
-            if 1 <= choice <= len(features):
-                feature_idx = choice - 1
-                feature = features[feature_idx]
-                feature_name = feature_names.get(feature, feature)
-                
-                # 分析选中的特征
-                analyze_single_feature(
-                    model_class=CNN_LSTM_MultiHeadAttention,
-                    base_metrics=base_metrics,
-                    weights_range=weights_range,
-                    feature_idx=feature_idx,
-                    feature_name=feature_name,
-                    train_X=data['train_X'],
-                    train_y=data['train_y'],
-                    val_X=data['val_X'],
-                    val_y=data['val_y'],
-                    test_X=data['test_X'],
-                    test_y=data['test_y'],
-                    save_dir=sensitivity_dir,
-                    params=model_params
-                )
-                print(f"特征 '{feature_name}' 的分析结果已保存至: {os.path.join(sensitivity_dir, feature_name)}")
-            else:
-                print(f"请输入1到{len(features)}之间的数字，或输入0结束")
-        except ValueError:
-            print("请输入有效的数字")
-    
-    print("\n所有已选择的特征分析完成！结果已保存至:", sensitivity_dir)
+    print("\nAll experiments completed. Results saved to:", save_dir)
 
 
 if __name__ == "__main__":
